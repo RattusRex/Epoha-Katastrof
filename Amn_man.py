@@ -119,41 +119,14 @@ async def give_karma_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("⚠️ Нихуя не понял, но что-то точно пошло по пизде.", ephemeral=False)
         raise error
 
-@client.tree.command(name="leaderboard", description="Список игроков")
-async def leaderboard(interaction: discord.Interaction):
-    """Display a ranked list of players with the highest Karma."""
-
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    # Get top 10 players by Karma, highest first
-    c.execute("SELECT user_id, karma FROM karma ORDER BY karma DESC LIMIT 50")
-    results = c.fetchall()
-    conn.close()
-
-    if not results:
-        await interaction.response.send_message("📜 Ничего по карме не найдено!", ephemeral=False)
-        return
-
-    # Build a formatted leaderboard
-    leaderboard_lines = []
-    for i, (user_id, karma_value) in enumerate(results, start=1):
-        # Try to resolve user mention from ID
-        user = client.get_user(user_id)
-        name = user.mention if user else f"Неизвестный пользователь ({user_id})"
-        leaderboard_lines.append(f"**{i}.** {name} — {round(karma_value, 2)}")
-
-    leaderboard_text = "\n".join(leaderboard_lines)
-
-    # Send public leaderboard message
-    await interaction.response.send_message(
-        f"🏆 **Доска Кармы** 🏆\n{leaderboard_text}", ephemeral=True
-    )
 
 PENALTY_ROLES = {
     "Штрафник (-1 карма)": -1,
     "Штрафник (-2 кармы)": -2,
     "Штрафник (-3 кармы)": -3,
 }
+
+
 
 def get_penalty(member: discord.Member):
     """Return (role_object, penalty_value) or (None, 0)."""
@@ -183,8 +156,72 @@ RARITY_DATA = {
     "Необычный": {"dc": 10, "days_dice": 8, "base_price": 500},
     "Редкий": {"dc": 15, "days_dice": 12, "base_price": 5000},
 }
+CONSUMABLE_BASE_PRICE = {
+    "Обычный": 50,
+    "Необычный": 250,
+    "Редкий": 2500,
+}
+RARITY_PRICE_ROLL_ADJUSTMENT = {
+    "Обычный": 10,
+    "Необычный": 0,
+    "Редкий": -10,
+}
+def get_base_price(rarity: str, consumable: str) -> int:
+    """Return the base price for an item, accounting for consumables."""
+    if consumable == "да" and rarity in CONSUMABLE_BASE_PRICE:
+        return CONSUMABLE_BASE_PRICE[rarity]
+    return RARITY_DATA[rarity]["base_price"]
 
+def _adjusted_price_roll(rarity: str) -> int:
+    """Roll d100 and apply the rarity-specific adjustment used by all shops."""
+    return random.randint(1, 100) + RARITY_PRICE_ROLL_ADJUSTMENT.get(rarity, 0)
 
+def roll_buy_price_multiplier(rarity: str):
+    """Roll the buy-side price multiplier. Returns (price_roll, multiplier)."""
+    price_roll = _adjusted_price_roll(rarity)
+    if price_roll <= 20:
+        multiplier = 1.5 + (random.randint(0, 500) / 1000)
+    elif price_roll <= 40:
+        multiplier = 1.0 + (random.randint(0, 490) / 1000)
+    elif price_roll <= 80:
+        multiplier = 0.75 + (random.randint(0, 240) / 1000)
+    elif price_roll <= 90:
+        multiplier = 0.5 + (random.randint(0, 240) / 1000)
+    else:
+        multiplier = 0.5 - (random.randint(0, 200) / 1000)
+    return price_roll, multiplier
+
+def roll_sell_price_multiplier(rarity: str):
+    """Roll the sell-side price multiplier. Returns (price_roll, multiplier)."""
+    price_roll = _adjusted_price_roll(rarity)
+    if price_roll <= 20:
+        multiplier = 0.5 - (random.randint(0, 200) / 1000)
+    elif price_roll <= 42:
+        multiplier = 0.5 + (random.randint(0, 250) / 1000)
+    elif price_roll <= 82:
+        multiplier = 0.75 + (random.randint(0, 150) / 1000)
+    elif price_roll <= 92:
+        multiplier = 0.9 + (random.randint(0, 350) / 1000)
+    else:
+        multiplier = 1.25 + (random.randint(0, 350) / 1000)
+    return price_roll, multiplier
+
+def calculate_final_price(rarity: str, consumable: str, mode: str):
+    """Roll a final item price.
+
+    mode: "buy" for searches, "sell" for sales.
+    Returns (price_roll, multiplier, base_price, final_price).
+    """
+    if mode == "buy":
+        price_roll, multiplier = roll_buy_price_multiplier(rarity)
+    elif mode == "sell":
+        price_roll, multiplier = roll_sell_price_multiplier(rarity)
+    else:
+        raise ValueError(f"Unknown price mode: {mode!r}")
+
+    base_price = get_base_price(rarity, consumable)
+    final_price = int(base_price * multiplier)
+    return price_roll, multiplier, base_price, final_price
 async def ask_item_name(interaction: discord.Interaction, rarity: str):
     """Отправляет поле для ввода названия предмета"""
     modal = ItemSearchModal(rarity)
@@ -323,37 +360,10 @@ class SelfSell(discord.ui.View):
         )
         if success:
             days_spent = round(random.randint(1, self.days_dice))
-            # Успех: броски дней и стоимости
-            price_roll = round(random.randint(1, 100))
-
-            if self.rarity == "Редкий":
-                price_roll -= 10
-            elif self.rarity == "Обычный":
-                price_roll += 10
-            else:
-                price_roll += 0
-
-            if price_roll <= 20:
-                price_mult = 0.5 - (random.randint(0, 200) / 1000)
-            elif price_roll <= 42:
-                price_mult = 0.5 + (random.randint(0, 250) / 1000)
-            elif price_roll <= 82:
-                price_mult = 0.75 + (random.randint(0, 150) / 1000)
-            elif price_roll <= 92:
-                price_mult = 0.9 + (random.randint(0, 350) / 1000)
-            elif price_roll >= 91:
-                price_mult = 1.25 + (random.randint(0, 350) / 1000)
-            if self.consumable == "да":
-                if self.rarity == "Редкий":
-                    self.base_price = 2500
-                elif self.rarity == "Необычный":
-                    self.base_price = 250
-                elif self.rarity == "Обычный":
-                    self.base_price = 50
-
-            final_price = int(self.base_price * price_mult)
-
-
+            price_roll, price_mult, base_price, final_price = calculate_final_price(
+                self.rarity, self.consumable, "sell"
+            )
+            self.base_price = base_price
 
             msg += (
                 f"✅ Предмет **{self.item_name}** Может быть продан!\n"
@@ -412,34 +422,10 @@ class SellRollsMerc(discord.ui.View):
 
         if success:
             days_spent = round(random.randint(1, self.days_dice))
-            # Успех: броски дней и стоимости
-            price_roll = round(random.randint(1, 100))
-
-            if self.rarity == "Редкий":
-                price_roll -= 10
-            elif self.rarity == "Обычный":
-                price_roll += 10
-            else:
-                price_roll += 0
-
-            if price_roll <= 20:
-                price_mult = 0.5 - (random.randint(0, 200) / 1000)
-            elif price_roll <= 42:
-                price_mult = 0.5 + (random.randint(0, 250) / 1000)
-            elif price_roll <= 82:
-                price_mult = 0.75 + (random.randint(0, 150) / 1000)
-            elif price_roll <= 92:
-                price_mult = 0.9 + (random.randint(0, 350) / 1000)
-            elif price_roll >= 91:
-                price_mult = 1.25 + (random.randint(0, 350) / 1000)
-            if self.consumable == "да":
-                if self.rarity == "Редкий":
-                    self.base_price = 2500
-                elif self.rarity == "Необычный":
-                    self.base_price = 250
-                elif self.rarity == "Обычный":
-                    self.base_price = 50
-            final_price = int(self.base_price * price_mult)
+            price_roll, price_mult, base_price, final_price = calculate_final_price(
+                self.rarity, self.consumable, "sell"
+            )
+            self.base_price = base_price
 
             round_days = round(days_spent)
             bablo = rounded * round_days
@@ -546,34 +532,10 @@ class SearchRollsMerc(discord.ui.View):
         if success:
             days_spent = round(random.randint(1, self.days_dice))
             # Успех: броски дней и стоимости
-            price_roll = round(random.randint(1, 100))
-
-            if self.rarity == "Редкий":
-                price_roll -= 10
-            elif self.rarity == "Обычный":
-                price_roll += 10
-            else:
-                price_roll += 0
-
-            if price_roll <= 20:
-                price_mult = 1.5 + (random.randint(0, 500) / 1000)
-            elif price_roll <= 40:
-                price_mult = 1.0 + (random.randint(0, 490) / 1000)
-            elif price_roll <= 80:
-                price_mult = 0.75 + (random.randint(0, 240) / 1000)
-            elif price_roll <= 90:
-                price_mult = 0.5 + (random.randint(0, 240) / 1000)
-            else:
-                price_mult = 0.5 - (random.randint(0, 200) / 1000)
-            if self.consumable == "да":
-                if self.rarity == "Редкий":
-                    self.base_price = 2500
-                elif self.rarity == "Необычный":
-                    self.base_price = 250
-                elif self.rarity == "Обычный":
-                    self.base_price = 50
-
-            final_price = int(self.base_price * (price_mult))
+            price_roll, price_mult, base_price, final_price = calculate_final_price(
+                self.rarity, self.consumable, "buy"
+            )
+            self.base_price = base_price
 
             round_days = round(days_spent)
             bablo = rounded * round_days
@@ -664,34 +626,11 @@ class SelfSearch(discord.ui.View):
         if success:
             days_spent = round(random.randint(1, self.days_dice))
             # Успех: броски дней и стоимости
-            price_roll = round(random.randint(1, 100))
 
-            if self.rarity == "Редкий":
-                price_roll -= 10
-            elif self.rarity == "Обычный":
-                price_roll += 10
-            else:
-                price_roll += 0
-
-            if price_roll <= 20:
-                price_mult = 1.5 + (random.randint(0, 500) / 1000)
-            elif price_roll <= 40:
-                price_mult = 1.0 + (random.randint(0, 490) / 1000)
-            elif price_roll <= 80:
-                price_mult = 0.75 + (random.randint(0, 240) / 1000)
-            elif price_roll <= 90:
-                price_mult = 0.5 + (random.randint(0, 240) / 1000)
-            else:
-                price_mult = 0.5 - (random.randint(0, 200) / 1000)
-            if self.consumable == "да":
-                if self.rarity == "Редкий":
-                    self.base_price = 2500
-                elif self.rarity == "Необычный":
-                    self.base_price = 250
-                elif self.rarity == "Обычный":
-                    self.base_price = 50
-
-            final_price = int(self.base_price * (price_mult))
+            price_roll, price_mult, base_price, final_price = calculate_final_price(
+                self.rarity, self.consumable, "buy"
+            )
+            self.base_price = base_price
 
             msg += (
                 f"✅ Предмет **{self.item_name}** найден!\n"
@@ -845,4 +784,4 @@ async def leaderboard(interaction: discord.Interaction):
         ephemeral=True
     )
 
-client.run("MTE2MTkzNTIwODQ2NDAwMzE0Mg.G-GKvH.IBXw-9c34C5xaGUx2-XlwRHFAgMjwefUSXjFts")
+client.run("")
