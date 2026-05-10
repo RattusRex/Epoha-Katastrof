@@ -688,7 +688,6 @@ class FoundItemView(discord.ui.View):
     @discord.ui.button(label="Купить предмет", style=discord.ButtonStyle.success)
     async def buy_item(self, interaction: discord.Interaction, button: discord.ui.Button):
         await send_transaction_summary(interaction, self.get_summary())
-        await send_transaction_summary(interaction, self.get_summary())
 
 # === Slash-команда /shop ===
 @client.tree.command(name="shop", description="Открыть магазин снаряжения")
@@ -863,4 +862,5 @@ async def send_transaction_summary(interaction: discord.Interaction, summary: st
     if log_channel:
         await log_channel.send(summary)
 
-client.run("")
+if __name__ == "__main__":
+    client.run("")
