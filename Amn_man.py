@@ -376,7 +376,7 @@ class SelfSell(discord.ui.View):
         else:
             msg += f"❌ Вы не смогли продать предмет **{self.item_name}**. И потратили в пустую **{self.days_dice}** дней"
 
-        await interaction.response.send_message(msg)
+        await interaction.response.send_message(msg, view=SelfSoldItemView(rarity=self.rarity, item_name=self.item_name, days_spent=days_spent, final_price=final_price, character_name=self.character_name, consumable=self.consumable))
 
     @discord.ui.button(label=f"Продать с вашим бонусом", style=discord.ButtonStyle.success)
     async def self_check(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -642,7 +642,14 @@ class SelfSearch(discord.ui.View):
         else:
             msg += f"❌ Вы не смогли найти предмет **{self.item_name}**. И потратили в пустую **{self.days_dice}** дней"
 
-        await interaction.response.send_message(msg)
+        await interaction.response.send_message(msg, view=SelfFoundItemView(
+                    rarity=self.rarity,
+                    item_name=self.item_name,
+                    days_spent=days_spent,
+                    final_price=final_price,
+                    character_name=self.character_name,
+                    consumable=self.consumable
+                ))
 
     @discord.ui.button(label=f"Искать с вашим бонусом", style=discord.ButtonStyle.success)
     async def self_check(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -783,5 +790,51 @@ async def leaderboard(interaction: discord.Interaction):
         view=view,
         ephemeral=True
     )
+
+class SelfFoundItemView(discord.ui.View):
+    def __init__(self, rarity: str, item_name: str, days_spent: int, final_price: int, character_name: str, consumable: str):
+        super().__init__(timeout=None)
+        self.rarity = rarity
+        self.item_name = item_name
+        self.days_spent = days_spent
+        self.final_price = final_price
+        self.character_name = character_name
+        self.consumable = consumable
+
+    @discord.ui.button(label="Купить предмет", style=discord.ButtonStyle.success)
+    async def buy_item(self, interaction: discord.Interaction, button: discord.ui.Button):
+        total = self.final_price
+        await interaction.response.send_message(
+            f"# Покупка\n"
+            f"1) {self.item_name}\n"
+            f"2) {self.character_name}\n"
+            f"⏳ 3) Потрачено дней: **{self.days_spent}**\n"
+            f"💰 4) Цена предмета: **{self.final_price}** Расходник? **{self.consumable}**\n"
+
+            f"💳 5) **Итого к оплате: {round(total, 1)} золотых**"
+        )
+
+class SelfSoldItemView(discord.ui.View):
+    def __init__(self, rarity: str, item_name: str, days_spent: int, final_price: int, character_name: str, consumable: str):
+        super().__init__(timeout=None)
+        self.rarity = rarity
+        self.item_name = item_name
+        self.days_spent = days_spent
+        self.final_price = final_price
+        self.character_name = character_name
+        self.consumable = consumable
+
+    @discord.ui.button(label="Продать предмет", style=discord.ButtonStyle.success)
+    async def sell_item(self, interaction: discord.Interaction, button: discord.ui.Button):
+        total = self.final_price
+        await interaction.response.send_message(
+            f"# Продажа\n"
+            f"1) {self.item_name}\n"
+            f"2) {self.character_name}\n"
+            f"⏳ 3) Потрачено дней: **{self.days_spent}**\n"
+            f"💰 4) Цена предмета: **{self.final_price}** Расходник? **{self.consumable}**\n"
+
+            f"💳 5) **Итого получено: {round(total, 1)} золотых**"
+        )
 
 client.run("")
